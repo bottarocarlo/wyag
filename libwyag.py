@@ -15,6 +15,29 @@ argparser = argparse.ArgumentParser(description="The stupid content tracker")
 argsubparser = argparser.add_subparsers(title="Command", dest="command")
 argsubparser.required = True
 
+argsp = argsubparser.add_parser("init", help = "Initialize a new, empty repository")
+argsp.add_argument("path", metavar="directory", nargs="?", default=".", help="where to create the repository")
+
+def cmd_init(args):
+    repo_create(args.path)
+
+def repo_find(path=".", required=True):
+    path = os.path.realpath(path)
+    
+    if os.path.realpath(path):
+        return GitRepository(path)
+    
+    parent = os.path.realpath(os.path.join(path,".."))
+    
+    if parent == path:
+        if required:
+            raise Exception("NO git directory")
+        else:
+            return None
+    # recursive case
+    return repo_find(parent, required)
+    
+
 def repo_path(repo, *path):
     """Compute path under repo's gitdir"""
     return os.path.join(repo.gitdir, *path)
