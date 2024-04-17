@@ -12,11 +12,52 @@ import sys
 import zlib
 
 argparser = argparse.ArgumentParser(description="The stupid content tracker")
-argsubparser = argparser.add_subparsers(title="Command", dest="command")
-argsubparser.required = True
+argsubparsers = argparser.add_subparsers(title="Command", dest="command")
+argsubparsers.required = True
 
-argsp = argsubparser.add_parser("init", help = "Initialize a new, empty repository")
+
+argsp = argsubparsers.add_parser("init", help = "Initialize a new, empty repository")
 argsp.add_argument("path", metavar="directory", nargs="?", default=".", help="where to create the repository")
+argsp = argsubparsers.add_parser("cat-file", help="Provide content of repository objects")
+argsp.add_argument("type", metavar="type",choices=["blob", "commit", "tag", "tree"], help="Specify the type")
+argsp.add_argument("object", metavar="object",help="The object to display")
+argsp = argsubparsers.add_parser("hash-object", help="Compute object ID and optionally creates a blob from a file")
+argsp.add_argument("-t", metavar="type",dest="type",choices=["blob", "commit", "tag", "tree"],default="blob",help="Specify the type")
+argsp.add_argument("-w",dest="write",action="store_true",help="Actually write the object into the database")
+argsp.add_argument("path", help="Read object from <file>")
+
+def cmd_hash_object(args):
+    if args.write:
+        repo = repo_find()
+    else:
+        repo = None
+
+    with open(args.path, "rb") as fd:
+        sha = object_hash(fd, args.type.encode(), repo)
+        print(sha)
+        
+def object_hash(fd, fmt, repo=None):
+    """ Hash object, writing it to repo if provided."""
+    data = fd.read()
+    match fmt:
+        case b'commit' : obj=GitCommit(data)
+        case b'tree'   : obj=GitTree(data)
+        case b'tag'    : obj=GitTag(data)
+        case b'blob'   : obj=GitBlob(data)
+        case _: raise Exception("Unknown type %s!" % fmt)
+
+    return object_write(obj, repo)
+
+def cmd_cat_file(args):
+    repo = repo_find()
+    cat_file(repo, args.object, fmt=args.type.encode())
+
+def cat_file(repo, obj, fmt=None):
+    obj = object_read(repo, object_find(repo, obj, fmt=fmt))
+    sys.stdout.buffer.write(obj.serialize())
+
+def object_find(repo, name, fmt=None, follow=True):
+    return name
 
 def cmd_init(args):
     repo_create(args.path)
@@ -110,6 +151,50 @@ def repo_default_config():
     ret.set("core", "filemode", "false")
     
     return ret
+
+def object_read(repo,sha):
+    path = repo_file(repo,"object", sha[0:2], sha[2:])
+    if not os.path.isfile(path):
+        return None
+    
+    with open (path,"rb") as f:
+        raw = zlib.decompress(f.read())
+        x = raw.find(b' ')
+        fmt = raw[0:x]
+        y = raw.find(b'\x00', x)
+        size = int(raw[x:y].decode("ascii"))
+        if size != len(raw)-y-1:
+            raise Exception("Malformed object {0}: bad length".format(sha))
+        match fmt:
+            case b'commit' : c=GitCommit
+            case b'tree'   : c=GitTree
+            case b'tag'    : c=GitTag
+            case b'blob'   : c=GitBlob
+            case _:
+                raise Exception("Unknown type {0} for object {1}".format(fmt.decode("ascii"), sha))
+
+        return c(raw[y+1:])
+
+def object_write(obj,repo=None):
+    data = obj.serialize()
+    result = obj.fmt + b' ' + str(len(data)).encode() + b'\x00'+ data
+    sha = hashlib.sha1(result).hexdigest
+    if repo:
+        path = repo_file(repo,"objects", sha[0:2], sha[2:], mkdir=True)
+        if not os.path.exists(path):
+            with open(path,'wb') as f:
+                f.write(zlib.compress(result))
+    return sha
+
+def GitBlob(GitObject):
+    fmt=b'blob'
+    
+    def serialize(self):
+        return self.blobdata
+    
+    def deserialize(self,data):
+        self.blobdata = data
+        
     
 class GitRepository (object):
     """A git repository"""
@@ -139,7 +224,25 @@ class GitRepository (object):
             if vers != 0:
                 raise Exception("Unsupported repositoryformatversion %s" % vers)
         
-        
+class GitObject(object):
+    def __init__(self, data=None):
+        if data != None:
+            self.deserialize(data)
+        else:
+            self.init()
+    def deserialize(self, repo):
+        """
+        This function MUST be implemented by subclasses. 
+        It must read the object's contents from self.data, a byte string, and do
+        whatever it takes to convert it into a meaningful representation.  What exactly that means depend on each subclass.
+        """
+        raise Exception("Unimplemented!")
+
+    def deserialize(self, data):
+        raise Exception("Unimplemented!")
+
+    def init(self):
+        pass # Just do nothing. This is a reasonable default!
 
 def main(argv=sys.argv[1:]):
     args = argparser.parse_args(argv)
