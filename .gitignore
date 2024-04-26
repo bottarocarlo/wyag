@@ -1,0 +1,7 @@
+# IDE / Text Editor conf
+.vscode
+
+# Cache
+__pycache__
+
+log.dot
